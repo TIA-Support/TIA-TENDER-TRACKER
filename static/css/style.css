@@ -1,0 +1,441 @@
+/* ═══════════════════════════════════════════════════════════
+   ICT Tender Tracker — Custom Styles
+   ═══════════════════════════════════════════════════════════ */
+
+:root {
+  --primary:     #36004f;
+  --primary-mid: #6a1a9a;
+  --accent:      #1fd7e0;
+  --accent-lite: #e0fafb;
+  --warn:        #e65c00;
+  --warn-lite:   #fff3e6;
+  --danger:      #c0392b;
+  --danger-lite: #fdecea;
+  --surface:     #ffffff;
+  --bg:          #f7f4fb;
+  --border:      #e5d9f2;
+  --text:        #1b0a2e;
+  --text-muted:  #7b6b90;
+  --shadow:      0 2px 12px rgba(54,0,79,.10);
+  --shadow-hover:0 6px 24px rgba(54,0,79,.20);
+  --radius:      12px;
+  --radius-sm:   8px;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ─── HEADER ─────────────────────────────────────────────── */
+.app-header {
+  background: #36004f;
+  color: #fff;
+  padding: .85rem 0;
+  box-shadow: 0 4px 20px rgba(54,0,79,.45);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+  border-bottom: 2px solid var(--accent);
+}
+
+/* Orb logo clip — shows only the sphere group on the left side of the image */
+.brand-orb-clip {
+  height: 52px;
+  width: 56px;
+  overflow: hidden;
+  flex-shrink: 0;
+  mix-blend-mode: screen;
+}
+.brand-orb-img {
+  height: 52px;
+  width: auto;
+  max-width: none;
+  display: block;
+}
+
+.brand-name {
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+  font-size: .85rem;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  line-height: 1.2;
+}
+
+.brand-sub {
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+  font-size: .65rem;
+  color: var(--accent);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  font-weight: 600;
+  opacity: .95;
+}
+
+.brand-services {
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+  font-size: .68rem;
+  color: rgba(255,255,255,.72);
+  letter-spacing: .3px;
+  margin-top: 2px;
+}
+
+/* Header stat pills */
+.stat-pill {
+  background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 30px;
+  padding: .3rem .9rem;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  font-size: .82rem;
+  color: #fff;
+}
+.stat-pill i { opacity: .8; }
+.stat-label { opacity: .65; font-size: .72rem; }
+
+/* Status dot */
+.status-dot { font-size: .55rem; }
+.status-dot.idle    { color: #7ecbff; }
+.status-dot.running { color: #ffe066; animation: pulse 1s infinite; }
+.status-dot.done    { color: #4cde9e; }
+.status-dot.error   { color: #ff7070; }
+
+@keyframes pulse {
+  0%,100% { opacity: 1; }
+  50%      { opacity: .3; }
+}
+
+/* Crawl button */
+.btn-crawl {
+  background: #4a0072;
+  color: #fff;
+  border: 2px solid rgba(255,255,255,.35);
+  border-radius: 30px;
+  padding: .45rem 1.4rem;
+  font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+  font-weight: 700;
+  font-size: .875rem;
+  transition: all .2s;
+  white-space: nowrap;
+}
+.btn-crawl:hover  { background: #6a1a9a; border-color: rgba(255,255,255,.6); transform: translateY(-1px); }
+.btn-crawl:active { transform: translateY(0); }
+.btn-crawl:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ─── TOOLBAR ─────────────────────────────────────────────── */
+.toolbar-bar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: .75rem 0;
+  position: sticky;
+  top: 74px;
+  z-index: 999;
+}
+
+.search-wrap {
+  position: relative;
+  min-width: 240px;
+}
+.search-icon {
+  position: absolute;
+  left: .85rem;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.search-input {
+  padding-left: 2.4rem;
+  border-radius: 30px;
+  border: 1.5px solid var(--border);
+  font-size: .875rem;
+  height: 38px;
+  transition: border-color .2s, box-shadow .2s;
+}
+.search-input:focus {
+  border-color: var(--primary-mid);
+  box-shadow: 0 0 0 3px rgba(106,26,154,.14);
+  outline: none;
+}
+
+.results-label { white-space: nowrap; }
+
+/* ─── GRID ─────────────────────────────────────────────────── */
+.tenders-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 1.25rem;
+}
+
+/* ─── TENDER CARD ──────────────────────────────────────────── */
+.tender-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow .2s, transform .2s;
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.tender-card:hover {
+  box-shadow: var(--shadow-hover);
+  transform: translateY(-3px);
+}
+
+/* Card colour-stripe at top */
+.card-stripe {
+  height: 5px;
+  background: linear-gradient(90deg, var(--primary), var(--primary-mid));
+}
+.card-stripe.closing-soon {
+  background: linear-gradient(90deg, var(--warn), #ffb347);
+}
+.card-stripe.closing-urgent {
+  background: linear-gradient(90deg, var(--danger), #e74c3c);
+}
+
+.card-body-inner {
+  padding: 1rem 1.1rem;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: .7rem;
+}
+
+/* Tender number badge + category */
+.card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: .4rem;
+}
+.badge-tn {
+  font-size: .72rem;
+  font-weight: 600;
+  background: #f2eafa;
+  color: var(--primary);
+  border: 1px solid #d4b8ec;
+  border-radius: 6px;
+  padding: .2rem .55rem;
+  letter-spacing: .3px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.badge-cat {
+  font-size: .68rem;
+  background: var(--accent-lite);
+  color: #0a888f;
+  border: 1px solid #a8e8ec;
+  border-radius: 6px;
+  padding: .2rem .55rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Title */
+.card-title {
+  font-size: .92rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Info rows */
+.info-row {
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  font-size: .815rem;
+}
+.info-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 16px;
+  text-align: center;
+}
+.info-label {
+  color: var(--text-muted);
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .3px;
+  min-width: 100px;
+  flex-shrink: 0;
+}
+.info-value {
+  color: var(--text);
+  line-height: 1.4;
+  word-break: break-word;
+}
+.info-value.closing-warn  { color: var(--warn);   font-weight: 600; }
+.info-value.closing-urgent{ color: var(--danger); font-weight: 700; }
+
+.briefing-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: .8rem;
+  font-style: italic;
+}
+
+/* Card footer */
+.card-footer-inner {
+  padding: .7rem 1.1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: .6rem;
+  flex-wrap: wrap;
+  background: #fafbfd;
+}
+
+.btn-doc {
+  background: #36004f;
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: .38rem .9rem;
+  font-size: .78rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  text-decoration: none;
+  transition: background .2s;
+}
+.btn-doc:hover  { background: #5d1a8a; color: #fff; }
+.btn-doc-disabled {
+  background: #d4d4d4;
+  color: #999;
+  cursor: not-allowed;
+}
+
+.btn-portal {
+  background: transparent;
+  color: #4a0072;
+  border: 1.5px solid #4a0072;
+  border-radius: var(--radius-sm);
+  padding: .35rem .9rem;
+  font-size: .78rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  text-decoration: none;
+  transition: all .2s;
+}
+.btn-portal:hover {
+  background: #4a0072;
+  color: #fff;
+}
+
+.btn-detail {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: .78rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .38rem .5rem;
+}
+.btn-detail:hover { color: var(--primary-mid); }
+
+.btn-remove {
+  background: none;
+  border: none;
+  color: #b0b8c8;
+  font-size: .85rem;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  padding: .38rem .45rem;
+  border-radius: var(--radius-sm);
+  transition: color .15s, background .15s;
+  line-height: 1;
+}
+.btn-remove:hover  { color: var(--danger); background: var(--danger-lite); }
+.btn-remove:disabled { opacity: .45; cursor: not-allowed; }
+
+/* ─── PAGINATION ──────────────────────────────────────────── */
+.pagination .page-link {
+  border-radius: var(--radius-sm);
+  border-color: var(--border);
+  color: var(--primary-mid);
+  font-size: .82rem;
+}
+.pagination .page-item.active .page-link {
+  background: var(--primary-mid);
+  border-color: var(--primary-mid);
+}
+
+/* ─── EMPTY / LOADING ─────────────────────────────────────── */
+.empty-state { padding: 4rem 2rem; }
+
+/* ─── MODAL ──────────────────────────────────────────────── */
+.detail-block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: .75rem 1rem;
+}
+.detail-label {
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-muted);
+  margin-bottom: .35rem;
+}
+.detail-value {
+  font-size: .9rem;
+  color: var(--text);
+  word-break: break-word;
+  line-height: 1.5;
+}
+
+/* ─── FOOTER ─────────────────────────────────────────────── */
+.app-footer {
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  margin-top: auto;
+}
+.app-footer a { color: var(--primary-mid); }
+
+/* ─── ALERT ──────────────────────────────────────────────── */
+#alert-bar { border-radius: var(--radius-sm); }
+
+/* ─── RESPONSIVE ─────────────────────────────────────────── */
+@media (max-width: 576px) {
+  .brand-title { font-size: 1.1rem; }
+  .tenders-grid { grid-template-columns: 1fr; }
+  .toolbar-bar { top: 60px; }
+}

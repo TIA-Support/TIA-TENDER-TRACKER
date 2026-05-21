@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TIA Solutions – Tender Tracker</title>
+
+  <!-- Bootstrap 5 -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+  <!-- Bootstrap Icons -->
+  <link rel="stylesheet"
+        href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <!-- Custom styles -->
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body>
+
+<!-- ═══════════════════════  HEADER  ═══════════════════════ -->
+<header class="app-header">
+  <div class="container-fluid px-4">
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
+
+      <!-- Brand -->
+      <div class="brand d-flex align-items-center gap-3">
+        <div class="brand-orb-clip">
+          <img src="/static/img/tia-logo-orb.png" alt="TIA Solutions" class="brand-orb-img">
+        </div>
+        <div>
+          <div class="brand-name">Technology Infrastructure Architects</div>
+          <div class="brand-sub">Tender Tracker</div>
+          <div class="brand-services">Cloud &middot; Network &amp; Cyber Security &middot; ISP &middot; VoIP &middot; IT Support &middot; Software</div>
+        </div>
+      </div>
+
+      <!-- Header stats -->
+      <div class="header-stats d-flex gap-3 flex-wrap">
+        <div class="stat-pill">
+          <i class="bi bi-card-list"></i>
+          <span id="stat-total">—</span>
+          <span class="stat-label">Tenders</span>
+        </div>
+        <div class="stat-pill">
+          <i class="bi bi-clock-history"></i>
+          <span id="stat-last-crawl">Never</span>
+          <span class="stat-label">Last Crawl</span>
+        </div>
+        <div class="stat-pill" id="crawl-status-pill">
+          <i class="bi bi-circle-fill status-dot idle"></i>
+          <span id="stat-status">Idle</span>
+        </div>
+      </div>
+
+      <!-- Crawl button -->
+      <button id="btn-crawl" class="btn btn-crawl" onclick="triggerCrawl()">
+        <i class="bi bi-arrow-repeat me-2"></i>Refresh Tenders
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- ═══════════════════════  TOOLBAR  ═══════════════════════ -->
+<div class="toolbar-bar">
+  <div class="container-fluid px-4">
+    <div class="d-flex align-items-center gap-3 flex-wrap">
+
+      <!-- Search -->
+      <div class="search-wrap flex-grow-1">
+        <i class="bi bi-search search-icon"></i>
+        <input id="search-input"
+               type="text"
+               class="form-control search-input"
+               placeholder="Search by title, tender number, organisation…"
+               oninput="onSearch()" />
+      </div>
+
+      <!-- Per-page -->
+      <div class="d-flex align-items-center gap-2">
+        <label class="text-muted small mb-0" for="per-page-sel">Show</label>
+        <select id="per-page-sel" class="form-select form-select-sm w-auto"
+                onchange="onPerPageChange()">
+          <option value="6">6</option>
+          <option value="12" selected>12</option>
+          <option value="24">24</option>
+          <option value="48">48</option>
+        </select>
+      </div>
+
+      <!-- Results count -->
+      <span id="results-label" class="results-label text-muted small"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════  MAIN CONTENT  ═══════════════════════ -->
+<main class="container-fluid px-4 py-4">
+
+  <!-- Alert banner for crawl messages -->
+  <div id="alert-bar" class="alert alert-info d-none align-items-center mb-4" role="alert">
+    <i class="bi bi-info-circle-fill me-2"></i>
+    <span id="alert-msg"></span>
+  </div>
+
+  <!-- Loading spinner -->
+  <div id="loading-state" class="text-center py-5 d-none">
+    <div class="spinner-border text-primary mb-3" style="width:3rem;height:3rem;" role="status"></div>
+    <p class="text-muted">Loading tenders…</p>
+  </div>
+
+  <!-- Empty state -->
+  <div id="empty-state" class="empty-state d-none text-center py-5">
+    <i class="bi bi-inbox display-4 text-muted mb-3 d-block"></i>
+    <h5 class="text-muted">No tenders found</h5>
+    <p class="text-muted small">Try a different search term or click <strong>Refresh Tenders</strong> to crawl for new results.</p>
+  </div>
+
+  <!-- Tender cards grid -->
+  <div id="tenders-grid" class="tenders-grid"></div>
+
+  <!-- Pagination -->
+  <div id="pagination-wrap" class="d-flex justify-content-center mt-4 d-none">
+    <nav>
+      <ul id="pagination" class="pagination pagination-sm mb-0"></ul>
+    </nav>
+  </div>
+
+</main>
+
+<!-- ═══════════════════════  DETAIL MODAL  ═══════════════════════ -->
+<div class="modal fade" id="tenderModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="modal-title"></h5>
+          <span class="badge bg-secondary mt-1" id="modal-tender-number"></span>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-3">
+
+          <div class="col-md-6">
+            <div class="detail-block">
+              <div class="detail-label"><i class="bi bi-building me-1"></i>Issuing Organisation</div>
+              <div class="detail-value" id="modal-org">—</div>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <div class="detail-block">
+              <div class="detail-label"><i class="bi bi-tag me-1"></i>Category</div>
+              <div class="detail-value" id="modal-category">—</div>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <div class="detail-block">
+              <div class="detail-label"><i class="bi bi-calendar-x me-1"></i>Closing Date</div>
+              <div class="detail-value" id="modal-closing-date">—</div>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <div class="detail-block">
+              <div class="detail-label"><i class="bi bi-clock me-1"></i>Closing Time</div>
+              <div class="detail-value" id="modal-closing-time">—</div>
+            </div>
+          </div>
+
+          <div class="col-12">
+            <div class="detail-block">
+              <div class="detail-label"><i class="bi bi-geo-alt me-1"></i>Briefing Details</div>
+              <div class="detail-value" id="modal-briefing">—</div>
+            </div>
+          </div>
+
+          <div class="col-md-6">
+            <div class="detail-block">
+              <div class="detail-label"><i class="bi bi-calendar-plus me-1"></i>Advertised Date</div>
+              <div class="detail-value" id="modal-advert">—</div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+      <div class="modal-footer flex-wrap gap-2">
+        <div id="modal-docs-wrap" class="d-flex flex-wrap gap-2"></div>
+        <a id="modal-src-link" href="#" target="_blank" rel="noopener noreferrer"
+           class="btn btn-outline-primary">
+          <i class="bi bi-box-arrow-up-right me-1"></i>View on eTenders Portal
+        </a>
+        <button type="button" class="btn btn-secondary ms-auto" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════  FOOTER  ═══════════════════════ -->
+<footer class="app-footer text-center py-3">
+  <span class="text-muted small">
+    ICT Tender Tracker &mdash; Data sourced from
+    <a href="https://www.etenders.gov.za" target="_blank" rel="noopener">etenders.gov.za</a>
+    &bull; For informational purposes only
+  </span>
+</footer>
+
+<!-- Bootstrap JS -->
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<!-- App JS -->
+<script src="/static/js/app.js"></script>
+</body>
+</html>
