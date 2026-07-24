@@ -45,69 +45,129 @@ _crawl_lock = threading.Lock()
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute(
-        """
+
+    c.execute("""
         CREATE TABLE IF NOT EXISTS tenders (
-            id               INTEGER PRIMARY KEY AUTOINCREMENT,
-            tender_number    TEXT,
-            title            TEXT    NOT NULL,
-            issuing_org      TEXT,
-            closing_date     TEXT,
-            closing_time     TEXT,
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tender_number TEXT,
+            title TEXT NOT NULL,
+            issuing_org TEXT,
+            closing_date TEXT,
+            closing_time TEXT,
             briefing_details TEXT,
-            document_url     TEXT,
-            source_url       TEXT,
-            category         TEXT,
-            advertised_date  TEXT,
+            document_url TEXT,
+            source_url TEXT,
+            category TEXT,
+            advertised_date TEXT,
             closing_date_iso TEXT,
-            created_at       TEXT DEFAULT (datetime('now','localtime')),
-            updated_at       TEXT DEFAULT (datetime('now','localtime')),
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            updated_at TEXT DEFAULT (datetime('now','localtime')),
             UNIQUE(title, issuing_org)
         )
-        """
-    )
-    # Migrate existing databases: add closing_date_iso if absent
+    """)
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tender_id INTEGER,
+            message TEXT,
+            is_read INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )
+    """)
+
     try:
         c.execute("ALTER TABLE tenders ADD COLUMN closing_date_iso TEXT")
     except sqlite3.OperationalError:
-        pass  # Column already exists
-    # Migrate: add document_urls column if absent
+        pass
+
     try:
         c.execute("ALTER TABLE tenders ADD COLUMN document_urls TEXT DEFAULT '[]'")
     except sqlite3.OperationalError:
-        pass  # Column already exists
-    # Backfill ISO dates for all records that are missing them
-    rows = c.execute(
-        "SELECT id, closing_date FROM tenders WHERE closing_date_iso IS NULL OR closing_date_iso = ''"
-    ).fetchall()
+        pass
+
+    try:
+        c.execute("ALTER TABLE tenders ADD COLUMN is_new INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass
+
+    rows = c.execute("""
+        SELECT id, closing_date
+        FROM tenders
+        WHERE closing_date_iso IS NULL
+           OR closing_date_iso = ''
+    """).fetchall()
+
     for rid, cd in rows:
         iso = _parse_closing_date_iso(cd)
         if iso:
-            c.execute("UPDATE tenders SET closing_date_iso = ? WHERE id = ?", (iso, rid))
+            c.execute(
+                "UPDATE tenders SET closing_date_iso=? WHERE id=?",
+                (iso, rid)
+            )
+
     conn.commit()
     conn.close()
-
 
 def _upsert_tenders(tenders: list) -> int:
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
+
     count = 0
+
     for t in tenders:
         try:
-            closing_date_iso = _parse_closing_date_iso(t.get("closing_date", ""))
-            # Normalise document_urls: prefer the scraped JSON list, else wrap single URL
+
+            closing_date_iso = _parse_closing_date_iso(
+                t.get("closing_date", "")
+            )
+
             raw_doc_urls = t.get("document_urls")
             if raw_doc_urls is None:
                 single = t.get("document_url", "")
                 raw_doc_urls = json.dumps([single] if single else [])
+
+            # Check if tender already exists
+            existing = c.execute(
+                """
+                SELECT id
+                FROM tenders
+                WHERE title = ?
+                AND issuing_org = ?
+                """,
+                (
+                    t.get("title", ""),
+                    t.get("issuing_org", "")
+                )
+            ).fetchone()
+
+            # Insert or update tender
             c.execute(
                 """
                 INSERT INTO tenders
-                    (tender_number, title, issuing_org, closing_date, closing_time,
-                     briefing_details, document_url, source_url, category, advertised_date,
-                     closing_date_iso, document_urls, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'))
-                ON CONFLICT(title, issuing_org) DO UPDATE SET
+                    (
+                        tender_number,
+                        title,
+                        issuing_org,
+                        closing_date,
+                        closing_time,
+                        briefing_details,
+                        document_url,
+                        source_url,
+                        category,
+                        advertised_date,
+                        closing_date_iso,
+                        document_urls,
+                        updated_at,
+                        is_new
+                    )
+
+                VALUES
+                    (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now','localtime'), ?)
+
+                ON CONFLICT(title, issuing_org)
+                DO UPDATE SET
+
                     tender_number    = excluded.tender_number,
                     closing_date     = excluded.closing_date,
                     closing_time     = excluded.closing_time,
@@ -133,16 +193,51 @@ def _upsert_tenders(tenders: list) -> int:
                     t.get("advertised_date", ""),
                     closing_date_iso,
                     raw_doc_urls,
+                    1 if existing is None else 0,
                 ),
             )
+
+            # New tender → notification
+            if existing is None:
+
+                tender_id = c.execute(
+                    """
+                    SELECT id
+                    FROM tenders
+                    WHERE title = ?
+                    AND issuing_org = ?
+                    """,
+                    (
+                        t.get("title", ""),
+                        t.get("issuing_org", "")
+                    )
+                ).fetchone()[0]
+
+                c.execute(
+                    """
+                    INSERT INTO notifications
+                    (
+                        tender_id,
+                        message
+                    )
+                    VALUES
+                    (?, ?)
+                    """,
+                    (
+                        tender_id,
+                        f"New tender added: {t.get('title')}"
+                    )
+                )
+
             count += 1
+
         except Exception as exc:
             print(f"[DB] Insert error: {exc}")
+
     conn.commit()
     conn.close()
+
     return count
-
-
 # ------------------------------------------------------------------ #
 #  Background crawl worker                                            #
 # ------------------------------------------------------------------ #

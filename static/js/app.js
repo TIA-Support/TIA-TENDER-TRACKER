@@ -21,10 +21,40 @@ let tenderModal = null;
 
 // ── Initialise ───────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  tenderModal = new bootstrap.Modal(document.getElementById('tenderModal'));
-  loadTenders();
-  startStatusPolling();
+
+    tenderModal = new bootstrap.Modal(
+        document.getElementById('tenderModal')
+    );
+
+    loadTenders();
+    loadNotifications();
+
+    startStatusPolling();
+
+    setInterval(loadNotifications, 30000);
+
 });
+
+async function loadNotifications() {
+
+    try{
+
+        const notifications =
+            await apiFetch("/api/notifications");
+
+        state.notifications = notifications;
+        state.unread = notifications.length;
+
+        document.getElementById(
+            "notification-count"
+        ).textContent = state.unread;
+
+    }
+    catch(e){
+        console.log(e);
+    }
+
+}
 
 // ── API helpers ──────────────────────────────────────────────
 async function apiFetch(url) {
@@ -190,6 +220,17 @@ async function removeTender(id, btn) {
 
 // ── Detail modal ─────────────────────────────────────────────
 function openDetail(idx) {
+  fetch("/api/notifications/read",{
+    method:"POST",
+    headers:{
+        "Content-Type":"application/json"
+    },
+    body:JSON.stringify({
+        tender_id:t.id
+    })
+});
+
+t.is_new = 0;
   const t = state.tenders[idx];
   if (!t) return;
 
@@ -342,7 +383,13 @@ async function checkStatus() {
       btn.innerHTML      = '<i class="bi bi-arrow-repeat me-2"></i>Refresh Tenders';
 
       // Reload grid after a crawl finishes
-      if (btn._wasCrawling) loadTenders();
+      if (btn._wasCrawling){
+
+    loadTenders();
+
+    loadNotifications();
+
+}
     }
 
     btn._wasCrawling = s.running;
@@ -432,4 +479,13 @@ function closingUrgency(dateStr) {
   if (!dt || isNaN(dt)) return '';
   const diffDays = Math.ceil((dt - Date.now()) / 86400000);
   return diffDays <= 3 ? 'urgent' : diffDays <= 7 ? 'soon' : '';
+
+  function showNewTenderToast(message){
+
+    showAlert(
+        "success",
+        message
+    );
+
+}
 }
