@@ -361,16 +361,100 @@ def api_crawl():
 
 @app.route("/api/tenders/<int:tender_id>", methods=["DELETE"])
 def api_delete_tender(tender_id):
+
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("DELETE FROM tenders WHERE id = ?", (tender_id,))
+
+    c.execute(
+        "DELETE FROM notifications WHERE tender_id = ?",
+        (tender_id,)
+    )
+
+    c.execute(
+        "DELETE FROM tenders WHERE id = ?",
+        (tender_id,)
+    )
+
     affected = c.rowcount
+
     conn.commit()
     conn.close()
+
     if affected:
         return jsonify({"status": "deleted"})
+
     return jsonify({"status": "not_found"}), 404
 
+@app.route("/api/notifications")
+def api_notifications():
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+
+    rows = c.execute("""
+        SELECT
+            n.id,
+            n.tender_id,
+            n.message,
+            n.created_at,
+            t.title,
+            t.is_new
+        FROM notifications n
+        LEFT JOIN tenders t
+            ON n.tender_id = t.id
+        WHERE n.is_read = 0
+        ORDER BY n.created_at DESC
+    """).fetchall()
+
+    conn.close()
+
+    return jsonify([dict(r) for r in rows])
+
+@app.route("/api/notifications/read", methods=["POST"])
+def api_notifications_read():
+
+    data = request.get_json() or {}
+
+    tender_id = data.get("tender_id")
+
+    if tender_id is None:
+        return jsonify(
+            {
+                "status": "error",
+                "message": "Missing tender_id"
+            }
+        ), 400
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+
+    c.execute(
+        """
+        UPDATE notifications
+        SET is_read = 1
+        WHERE tender_id = ?
+        """,
+        (tender_id,)
+    )
+
+    c.execute(
+        """
+        UPDATE tenders
+        SET is_new = 0
+        WHERE id = ?
+        """,
+        (tender_id,)
+    )
+
+    conn.commit()
+    conn.close()
+
+    return jsonify(
+        {
+            "status": "success"
+        }
+    )
 
 @app.route("/api/status")
 def api_status():
