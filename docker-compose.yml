@@ -1,0 +1,14 @@
+services:
+  tender-tracker:
+    build: .
+    container_name: tia-tender-tracker
+    ports:
+      - "5000:5000"
+    volumes:
+      - tender-data:/data   # tenders.db is stored here (survives restarts)
+    restart: unless-stopped
+    environment:
+      - DATA_DIR=/data
+
+volumes:
+  tender-data:
