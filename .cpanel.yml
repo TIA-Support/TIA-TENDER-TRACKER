@@ -1,9 +1,10 @@
 ---
 deployment:
   tasks:
-    - export DEPLOYPATH=/home/om4rgf9myl4q/tenders-app/
-    - /bin/rsync -a --exclude='.git' ./ $DEPLOYPATH
-    - /bin/chmod -R u+rwX,go+rX,go-w $DEPLOYPATH
-    - /home/om4rgf9myl4q/virtualenv/tenders-app/3.11/bin/pip install -r $DEPLOYPATH/requirements.txt
-    - /bin/mkdir -p $DEPLOYPATH/tmp
-    - /bin/touch $DEPLOYPATH/tmp/restart.txt
+    - export APPPATH=/home/om4rgf9myl4q/tenders-app/
+    - /bin/mkdir -p $APPPATH
+    - /bin/rsync -av --exclude='.git' --exclude='.cpanel.yml' --exclude='tmp' --exclude='.DS_Store' ./ $APPPATH
+    - /bin/chmod -R u+rwX,go+rX $APPPATH
+    - /home/om4rgf9myl4q/virtualenv/tenders-app/3.11/bin/pip install -r $APPPATH/requirements.txt
+    - /bin/mkdir -p $APPPATH/tmp
+    - /bin/touch $APPPATH/tmp/restart.txt
