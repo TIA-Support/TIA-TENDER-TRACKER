@@ -1,39 +1,43 @@
 """
-ICT Tender Crawler — Flask backend (PostgreSQL / Neon)
+TIA Tender Tracker - Flask backend (MySQL / cPanel)
+
+The crawler no longer runs inside this app. It runs elsewhere (GitHub Actions)
+and sends the tenders it finds to POST /api/ingest.
 """
+import hashlib
+import hmac
 import json
 import os
-import threading
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+from urllib.parse import unquote, urlparse
 
-import psycopg2
-import psycopg2.extras
+import pymysql
+import pymysql.cursors
 from flask import Flask, jsonify, render_template, request
 
-from crawler.etenders_scraper import ETendersScraper
-
 app = Flask(__name__)
+app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024  # 20 MB upload limit
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
+INGEST_SECRET = os.environ.get("INGEST_SECRET", "")
 
-# South African date for closing-date comparisons (SAST = UTC+2).
-# Using a SQL expression so the DB always computes the correct local date
-# regardless of which timezone the Neon server runs in.
-_SA_TODAY = "TO_CHAR(NOW() AT TIME ZONE 'Africa/Johannesburg', 'YYYY-MM-DD')"
+# South African time (SAST = UTC+2, no daylight saving)
+SA_TZ = timezone(timedelta(hours=2))
 
-# Regex pattern for online briefings — used by both online and physical filters
+# Pattern for online briefings - used by both the online and physical filters
 _ONLINE_PATTERN = (
     "microsoft teams|ms teams|teams meeting|teams link|join.{0,20}teams"
-    "|zoom\\.us|zoom meeting|zoom link|join.{0,20}zoom"
-    "|google meet|meet\\.google"
+    "|zoom[.]us|zoom meeting|zoom link|join.{0,20}zoom"
+    "|google meet|meet[.]google"
     "|webex|skype for business"
     "|virtual|virtual briefing|virtual meeting|virtual session"
     "|meeting link|briefing link|online meeting|online briefing"
     "|join via link|click.{0,20}join|link to join|teams invite"
 )
 
-def _parse_closing_date_iso(date_str: str) -> str:
-    """Convert DD/MM/YYYY to YYYY-MM-DD for proper SQL sorting. Returns '' on failure."""
+
+def _parse_closing_date_iso(date_str):
+    """Convert DD/MM/YYYY to YYYY-MM-DD for sorting. Returns '' on failure."""
     if not date_str:
         return ""
     try:
@@ -42,13 +46,9 @@ def _parse_closing_date_iso(date_str: str) -> str:
         return ""
 
 
-crawl_state = {
-    "running": False,
-    "last_crawl": None,
-    "message": "No crawl has run yet.",
-    "found": 0,
-}
-_crawl_lock = threading.Lock()
+def _tender_key(title, org):
+    raw = f"{(title or '').strip().lower()}|{(org or '').strip().lower()}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 # ------------------------------------------------------------------ #
@@ -57,138 +57,119 @@ _crawl_lock = threading.Lock()
 
 
 def _get_conn():
-    """Return a new psycopg2 connection to Neon."""
-    return psycopg2.connect(DATABASE_URL)
+    """Return a new MySQL connection, built from DATABASE_URL."""
+    u = urlparse(DATABASE_URL)
+    return pymysql.connect(
+        host=u.hostname or "localhost",
+        port=u.port or 3306,
+        user=unquote(u.username or ""),
+        password=unquote(u.password or ""),
+        database=(u.path or "/").lstrip("/"),
+        charset="utf8mb4",
+        cursorclass=pymysql.cursors.DictCursor,
+        init_command="SET time_zone = '+00:00'",
+        autocommit=False,
+    )
 
 
 def init_db():
     conn = _get_conn()
-    c = conn.cursor()
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS tenders (
-            id               SERIAL PRIMARY KEY,
-            tender_number    TEXT,
-            title            TEXT    NOT NULL,
-            issuing_org      TEXT,
-            closing_date     TEXT,
-            closing_time     TEXT,
-            briefing_details TEXT,
-            document_url     TEXT,
-            source_url       TEXT,
-            category         TEXT,
-            advertised_date  TEXT,
-            closing_date_iso TEXT,
-            document_urls    TEXT DEFAULT '[]',
-            created_at       TIMESTAMPTZ DEFAULT NOW(),
-            updated_at       TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(title, issuing_org)
-        )
-        """
-    )
-    conn.commit()
-
-    # Backfill ISO dates for any rows that are missing them
-    c.execute(
-        "SELECT id, closing_date FROM tenders WHERE closing_date_iso IS NULL OR closing_date_iso = ''"
-    )
-    rows = c.fetchall()
-    for rid, cd in rows:
-        iso = _parse_closing_date_iso(cd)
-        if iso:
-            c.execute("UPDATE tenders SET closing_date_iso = %s WHERE id = %s", (iso, rid))
-    conn.commit()
-    conn.close()
-
-
-def _upsert_tenders(tenders: list) -> int:
-    conn = _get_conn()
-    c = conn.cursor()
-    count = 0
-    for t in tenders:
-        try:
-            # Use a savepoint per row so one bad insert doesn't abort the
-            # whole transaction (PostgreSQL aborts on any statement error).
-            c.execute("SAVEPOINT sp_upsert")
-            closing_date_iso = _parse_closing_date_iso(t.get("closing_date", ""))
-            raw_doc_urls = t.get("document_urls")
-            if raw_doc_urls is None:
-                single = t.get("document_url", "")
-                raw_doc_urls = json.dumps([single] if single else [])
+    try:
+        with conn.cursor() as c:
             c.execute(
                 """
-                INSERT INTO tenders
-                    (tender_number, title, issuing_org, closing_date, closing_time,
-                     briefing_details, document_url, source_url, category, advertised_date,
-                     closing_date_iso, document_urls, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT(title, issuing_org) DO UPDATE SET
-                    tender_number    = EXCLUDED.tender_number,
-                    closing_date     = EXCLUDED.closing_date,
-                    closing_time     = EXCLUDED.closing_time,
-                    briefing_details = EXCLUDED.briefing_details,
-                    document_url     = EXCLUDED.document_url,
-                    source_url       = EXCLUDED.source_url,
-                    category         = EXCLUDED.category,
-                    advertised_date  = EXCLUDED.advertised_date,
-                    closing_date_iso = EXCLUDED.closing_date_iso,
-                    document_urls    = EXCLUDED.document_urls,
-                    updated_at       = EXCLUDED.updated_at
-                """,
-                (
-                    t.get("tender_number", ""),
-                    t.get("title", ""),
-                    t.get("issuing_org", ""),
-                    t.get("closing_date", ""),
-                    t.get("closing_time", ""),
-                    t.get("briefing_details", ""),
-                    t.get("document_url", ""),
-                    t.get("source_url", ""),
-                    t.get("category", "ICT"),
-                    t.get("advertised_date", ""),
-                    closing_date_iso,
-                    raw_doc_urls,
-                ),
+                CREATE TABLE IF NOT EXISTS tenders (
+                    id               INT AUTO_INCREMENT PRIMARY KEY,
+                    uniq_hash        CHAR(64) NOT NULL,
+                    tender_number    TEXT,
+                    title            TEXT NOT NULL,
+                    issuing_org      TEXT,
+                    closing_date     VARCHAR(50),
+                    closing_time     VARCHAR(50),
+                    briefing_details TEXT,
+                    document_url     TEXT,
+                    source_url       TEXT,
+                    category         VARCHAR(100),
+                    advertised_date  VARCHAR(50),
+                    closing_date_iso VARCHAR(10),
+                    document_urls    LONGTEXT,
+                    created_at       DATETIME NOT NULL,
+                    updated_at       DATETIME NOT NULL,
+                    UNIQUE KEY uq_tender_hash (uniq_hash),
+                    KEY idx_closing_date_iso (closing_date_iso)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                """
             )
-            c.execute("RELEASE SAVEPOINT sp_upsert")
-            count += 1
-        except Exception as exc:
-            c.execute("ROLLBACK TO SAVEPOINT sp_upsert")
-            print(f"[DB] Insert error: {exc}")
-    conn.commit()
-    conn.close()
-    return count
-
-
-# ------------------------------------------------------------------ #
-#  Background crawl worker                                            #
-# ------------------------------------------------------------------ #
-
-
-def _crawl_worker():
-    global crawl_state
-    with _crawl_lock:
-        crawl_state["running"] = True
-        crawl_state["message"] = "Crawling eTenders portal…"
-
-    try:
-        scraper = ETendersScraper()
-        tenders = scraper.scrape()
-        saved = _upsert_tenders(tenders)
-
-        with _crawl_lock:
-            crawl_state["found"] = saved
-            crawl_state["last_crawl"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            crawl_state["message"] = (
-                f"Crawl complete — {len(tenders)} ICT tenders found, {saved} saved/updated."
-            )
-    except Exception as exc:
-        with _crawl_lock:
-            crawl_state["message"] = f"Crawl failed: {exc}"
-        print(f"[Crawl] Error: {exc}")
+        conn.commit()
     finally:
-        with _crawl_lock:
-            crawl_state["running"] = False
+        conn.close()
+
+
+def _upsert_tenders(tenders):
+    conn = _get_conn()
+    count = 0
+    try:
+        with conn.cursor() as c:
+            for t in tenders:
+                try:
+                    title = (t.get("title") or "").strip()
+                    if not title:
+                        continue
+                    org = t.get("issuing_org", "") or ""
+                    closing_date_iso = _parse_closing_date_iso(t.get("closing_date", ""))
+
+                    raw_doc_urls = t.get("document_urls")
+                    if raw_doc_urls is None:
+                        single = t.get("document_url", "")
+                        raw_doc_urls = json.dumps([single] if single else [])
+                    elif not isinstance(raw_doc_urls, str):
+                        raw_doc_urls = json.dumps(raw_doc_urls)
+
+                    c.execute(
+                        """
+                        INSERT INTO tenders
+                            (uniq_hash, tender_number, title, issuing_org, closing_date,
+                             closing_time, briefing_details, document_url, source_url,
+                             category, advertised_date, closing_date_iso, document_urls,
+                             created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                                UTC_TIMESTAMP(), UTC_TIMESTAMP())
+                        ON DUPLICATE KEY UPDATE
+                            tender_number    = VALUES(tender_number),
+                            closing_date     = VALUES(closing_date),
+                            closing_time     = VALUES(closing_time),
+                            briefing_details = VALUES(briefing_details),
+                            document_url     = VALUES(document_url),
+                            source_url       = VALUES(source_url),
+                            category         = VALUES(category),
+                            advertised_date  = VALUES(advertised_date),
+                            closing_date_iso = VALUES(closing_date_iso),
+                            document_urls    = VALUES(document_urls),
+                            updated_at       = UTC_TIMESTAMP()
+                        """,
+                        (
+                            _tender_key(title, org),
+                            t.get("tender_number", ""),
+                            title,
+                            org,
+                            t.get("closing_date", ""),
+                            t.get("closing_time", ""),
+                            t.get("briefing_details", ""),
+                            t.get("document_url", ""),
+                            t.get("source_url", ""),
+                            t.get("category", "ICT"),
+                            t.get("advertised_date", ""),
+                            closing_date_iso,
+                            raw_doc_urls,
+                        ),
+                    )
+                    count += 1
+                except Exception as exc:
+                    print(f"[DB] Insert error: {exc}")
+        conn.commit()
+    finally:
+        conn.close()
+    return count
 
 
 # ------------------------------------------------------------------ #
@@ -213,7 +194,6 @@ def api_tenders():
     except (ValueError, TypeError):
         per_page = 12
 
-    # Validate filter values against allowed options to prevent injection
     closing_filter = request.args.get("closing_filter", "all")
     if closing_filter not in ("all", "week", "month"):
         closing_filter = "all"
@@ -227,114 +207,126 @@ def api_tenders():
         briefing_filter = "all"
 
     offset = (page - 1) * per_page
-    sa_tz  = "AT TIME ZONE 'Africa/Johannesburg'"
 
-    # Build WHERE conditions dynamically
+    now_sa = datetime.now(SA_TZ)
+    today_iso = now_sa.strftime("%Y-%m-%d")
+    midnight_sa = now_sa.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    # Always exclude expired tenders
     conditions = [
-        # Always exclude expired tenders
-        f"(closing_date_iso IS NULL OR closing_date_iso = '' OR closing_date_iso >= {_SA_TODAY})"
+        "closing_date_iso IS NULL OR closing_date_iso = '' OR closing_date_iso >= %s"
     ]
+    params = [today_iso]
 
-    if closing_filter == "week":
+    if closing_filter in ("week", "month"):
+        days = 7 if closing_filter == "week" else 30
+        limit_iso = (now_sa + timedelta(days=days)).strftime("%Y-%m-%d")
         conditions.append(
-            f"closing_date_iso IS NOT NULL AND closing_date_iso != '' AND "
-            f"closing_date_iso <= TO_CHAR((NOW() {sa_tz}) + INTERVAL '7 days', 'YYYY-MM-DD')"
+            "closing_date_iso IS NOT NULL AND closing_date_iso != '' "
+            "AND closing_date_iso <= %s"
         )
-    elif closing_filter == "month":
-        conditions.append(
-            f"closing_date_iso IS NOT NULL AND closing_date_iso != '' AND "
-            f"closing_date_iso <= TO_CHAR((NOW() {sa_tz}) + INTERVAL '30 days', 'YYYY-MM-DD')"
-        )
+        params.append(limit_iso)
 
-    if new_filter == "today":
-        conditions.append(f"created_at >= (NOW() {sa_tz})::date")
-    elif new_filter == "week":
-        conditions.append(f"created_at >= ((NOW() {sa_tz})::date - INTERVAL '7 days')")
+    if new_filter in ("today", "week"):
+        start_sa = midnight_sa if new_filter == "today" else midnight_sa - timedelta(days=7)
+        start_utc = start_sa.astimezone(timezone.utc).replace(tzinfo=None)
+        conditions.append("created_at >= %s")
+        params.append(start_utc)
 
     if briefing_filter == "any":
         conditions.append("briefing_details IS NOT NULL AND briefing_details != ''")
     elif briefing_filter == "online":
-        conditions.append(f"briefing_details ~* '({_ONLINE_PATTERN})'")
+        conditions.append("briefing_details REGEXP %s")
+        params.append(_ONLINE_PATTERN)
     elif briefing_filter == "physical":
-        # Catch-all: has briefing details but is not clearly online
         conditions.append(
-            f"briefing_details IS NOT NULL AND briefing_details != '' "
-            f"AND NOT (briefing_details ~* '({_ONLINE_PATTERN})')"
+            "briefing_details IS NOT NULL AND briefing_details != '' "
+            "AND NOT (briefing_details REGEXP %s)"
         )
-        
-    where = " AND ".join(f"({cond})" for cond in conditions)
+        params.append(_ONLINE_PATTERN)
 
-    conn = _get_conn()
-    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    if search:
+        like = f"%{search}%"
+        conditions.append(
+            "title LIKE %s OR tender_number LIKE %s OR issuing_org LIKE %s "
+            "OR briefing_details LIKE %s OR category LIKE %s"
+        )
+        params.extend([like] * 5)
+
+    where = " AND ".join(f"({cond})" for cond in conditions)
 
     order = """ORDER BY CASE WHEN closing_date_iso IS NULL OR closing_date_iso = ''
                              THEN '9999-12-31' ELSE closing_date_iso END ASC,
                     updated_at DESC"""
 
-    if search:
-        like = f"%{search}%"
-        c.execute(
-            f"""
-            SELECT * FROM tenders
-            WHERE {where}
-              AND (title ILIKE %s OR tender_number ILIKE %s
-                   OR issuing_org ILIKE %s OR briefing_details ILIKE %s OR category ILIKE %s)
-            {order}
-            LIMIT %s OFFSET %s
-            """,
-            (like, like, like, like, like, per_page, offset),
-        )
-        rows = c.fetchall()
-        c.execute(
-            f"""
-            SELECT COUNT(*) FROM tenders
-            WHERE {where}
-              AND (title ILIKE %s OR tender_number ILIKE %s
-                   OR issuing_org ILIKE %s OR briefing_details ILIKE %s OR category ILIKE %s)
-            """,
-            (like, like, like, like, like),
-        )
-    else:
-        c.execute(
-            f"SELECT * FROM tenders WHERE {where} {order} LIMIT %s OFFSET %s",
-            (per_page, offset),
-        )
-        rows = c.fetchall()
-        c.execute(f"SELECT COUNT(*) FROM tenders WHERE {where}")
+    conn = _get_conn()
+    try:
+        with conn.cursor() as c:
+            c.execute(
+                f"SELECT * FROM tenders WHERE {where} {order} LIMIT %s OFFSET %s",
+                params + [per_page, offset],
+            )
+            rows = c.fetchall()
+            c.execute(f"SELECT COUNT(*) AS total FROM tenders WHERE {where}", params)
+            total = c.fetchone()["total"]
+    finally:
+        conn.close()
 
-    total = c.fetchone()["count"]
-    conn.close()
+    for r in rows:
+        r.pop("uniq_hash", None)
 
     return jsonify(
         {
-            "tenders":  [dict(r) for r in rows],
-            "total":    total,
-            "page":     page,
+            "tenders": rows,
+            "total": total,
+            "page": page,
             "per_page": per_page,
-            "pages":    max(1, (total + per_page - 1) // per_page),
+            "pages": max(1, (total + per_page - 1) // per_page),
         }
     )
 
 
+@app.route("/api/ingest", methods=["POST"])
+def api_ingest():
+    """Called by the crawler (GitHub Actions) to send in the tenders it found."""
+    if not INGEST_SECRET:
+        return jsonify({"status": "error", "message": "Ingest is not configured."}), 503
+
+    auth = request.headers.get("Authorization", "")
+    expected = f"Bearer {INGEST_SECRET}"
+    if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+        return jsonify({"status": "error", "message": "Unauthorized."}), 401
+
+    data = request.get_json(silent=True) or {}
+    tenders = data.get("tenders")
+    if not isinstance(tenders, list):
+        return jsonify({"status": "error", "message": "Expected a 'tenders' list."}), 400
+
+    saved = _upsert_tenders(tenders)
+    return jsonify({"status": "ok", "received": len(tenders), "saved": saved})
+
+
 @app.route("/api/crawl", methods=["POST"])
 def api_crawl():
-    with _crawl_lock:
-        if crawl_state["running"]:
-            return jsonify({"status": "already_running", "message": "A crawl is already in progress."})
-
-    t = threading.Thread(target=_crawl_worker, daemon=True)
-    t.start()
-    return jsonify({"status": "started", "message": "Crawl started in background."})
+    # The crawl now runs automatically on a schedule, outside this server.
+    return jsonify(
+        {
+            "status": "scheduled",
+            "message": "The crawler runs automatically on a schedule. New tenders appear here after each run.",
+        }
+    )
 
 
 @app.route("/api/tenders/<int:tender_id>", methods=["DELETE"])
 def api_delete_tender(tender_id):
     conn = _get_conn()
-    c = conn.cursor()
-    c.execute("DELETE FROM tenders WHERE id = %s", (tender_id,))
-    affected = c.rowcount
-    conn.commit()
-    conn.close()
+    try:
+        with conn.cursor() as c:
+            c.execute("DELETE FROM tenders WHERE id = %s", (tender_id,))
+            affected = c.rowcount
+        conn.commit()
+    finally:
+        conn.close()
     if affected:
         return jsonify({"status": "deleted"})
     return jsonify({"status": "not_found"}), 404
@@ -343,24 +335,41 @@ def api_delete_tender(tender_id):
 @app.route("/api/status")
 def api_status():
     conn = _get_conn()
-    c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM tenders")
-    total = c.fetchone()[0]
-    conn.close()
-    with _crawl_lock:
-        state = dict(crawl_state)
-    state["total_tenders"] = total
-    return jsonify(state)
+    try:
+        with conn.cursor() as c:
+            c.execute("SELECT COUNT(*) AS total, MAX(updated_at) AS last FROM tenders")
+            row = c.fetchone()
+    finally:
+        conn.close()
+
+    last = row["last"]
+    last_crawl = None
+    if last:
+        last_crawl = (
+            last.replace(tzinfo=timezone.utc).astimezone(SA_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        )
+
+    return jsonify(
+        {
+            "running": False,
+            "last_crawl": last_crawl,
+            "message": "The crawler runs automatically on a schedule.",
+            "found": row["total"],
+            "total_tenders": row["total"],
+        }
+    )
 
 
 # ------------------------------------------------------------------ #
-#  Entry point                                                        #
+#  Startup                                                            #
 # ------------------------------------------------------------------ #
+
+try:
+    init_db()
+except Exception as exc:
+    print(f"[DB] init_db failed: {exc}")
 
 
 if __name__ == "__main__":
-    init_db()
-    t = threading.Thread(target=_crawl_worker, daemon=True)
-    t.start()
     port = int(os.environ.get("PORT", 5000))
     app.run(debug=False, host="0.0.0.0", port=port, use_reloader=False)
