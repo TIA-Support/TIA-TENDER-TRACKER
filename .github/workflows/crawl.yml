@@ -1,0 +1,24 @@
+name: Crawl eTenders
+
+on:
+  schedule:
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install requirements
+        run: pip install -r requirements-crawler.txt
+      - name: Install browser
+        run: playwright install --with-deps chromium
+      - name: Run crawler
+        env:
+          INGEST_SECRET: ${{ secrets.INGEST_SECRET }}
+        run: python run_crawl.py
